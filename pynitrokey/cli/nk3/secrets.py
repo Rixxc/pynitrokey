@@ -1,13 +1,17 @@
 import csv
 import io
 import json
+import re
 import sys
 import typing
+import urllib
 from base64 import b32decode
 from typing import Callable, List, Optional
 
 import click
+import pyautogui
 from click_aliases import ClickAliasedGroup
+from pyzbar.pyzbar import decode
 
 from pynitrokey.cli.nk3 import Context, nk3
 from pynitrokey.helpers import AskUser, local_critical, local_print
@@ -169,6 +173,118 @@ def add_otp(
 
         call(app)
         local_print("Done")
+
+
+@secrets.command
+@click.pass_obj
+@click.option(
+    "--touch-button",
+    "touch_button",
+    type=click.BOOL,
+    help="This credential requires button press before use",
+    is_flag=True,
+)
+@click.option(
+    "--protect-with-pin",
+    "pin_protection",
+    type=click.BOOL,
+    help="This credential should be additionally encrypted with a PIN, which will be required before each use",
+    is_flag=True,
+)
+def add_otp_qrcode(ctx: Context, touch_button: bool, pin_protection: bool) -> None:
+    screenshot = pyautogui.screenshot()
+    qrcodes = decode(screenshot)
+
+    if len(qrcodes) < 1:
+        raise click.ClickException(
+            "Please move the qrcode somewhere visible on the screen"
+        )
+
+    found_valid_qrcode = False
+    for qrcode in qrcodes:
+        data = qrcode.data.decode()
+
+        parsed = urllib.parse.urlparse(data, scheme="otpauth")
+        if not parsed:
+            continue
+
+        if parsed.scheme != "otpauth":
+            continue
+
+        otp_kind = STRING_TO_KIND.get(parsed.netloc.upper(), None)
+        if not otp_kind:
+            continue
+
+        match = re.match(r"/((?P<issuer>.*):){0,1}(?P<accountname>.*)", parsed.path)
+        if not match or not match.group("accountname"):
+            continue
+
+        accountname = match.group("accountname")
+        issuer = None
+        if match.group("issuer"):
+            issuer = match.group("issuer")
+
+        query = urllib.parse.parse_qs(parsed.query)
+
+        secret_bytes = b32decode(query["secret"][0]) if "secret" in query else None
+        if not secret_bytes:
+            continue
+
+        if "algorithm" in query:
+            hash_algorithm = ALGORITHM_TO_KIND.get(query["algorithm"][0], None)
+            if not hash_algorithm:
+                continue
+        else:
+            hash_algorithm = ALGORITHM_TO_KIND["SHA1"]
+
+        digits = 6
+        if "digits" in query and query["digits"] in ["6", "8"]:
+            digits = int(query["digits"][0])
+
+        counter_start = 0
+        if "counter" in query:
+            counter_start = int(query["counter"][0])
+
+        if "issuer" in query:
+            issuer = query["issuer"][0]
+
+        if issuer:
+            name = f"{issuer}:{accountname}"
+        else:
+            name = accountname
+
+        local_print(f'Found qrcode for following account: "{name}"')
+        if input("Do you want to rename the account? [yN]: ").lower() == "y":
+            name = input("Name: ")
+        if not input(f'Do you want to add "{name}"? Type YES: ') == "YES":
+            local_print("Account was NOT added")
+            found_valid_qrcode = True
+            break
+
+        with ctx.connect_device() as device:
+            app = SecretsApp(device)
+            ask_to_touch_if_needed()
+
+            @repeat_if_pin_needed
+            def call(app: SecretsApp) -> None:
+                app.register(
+                    name.encode(),
+                    secret_bytes,
+                    digits,
+                    kind=otp_kind,
+                    algo=hash_algorithm,
+                    initial_counter_value=counter_start,
+                    touch_button_required=touch_button,
+                    pin_based_encryption=pin_protection,
+                )
+
+            call(app)
+            local_print("Done")
+            found_valid_qrcode = True
+            break
+
+    if not found_valid_qrcode:
+        raise click.ClickException("The qrcode is not a valid OTP qrcode")
 
 
 @secrets.command

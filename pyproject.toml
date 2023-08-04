@@ -41,6 +41,8 @@ dependencies = [
   "protobuf >=3.17.3, < 4.0.0",
   "click-aliases",
   "semver",
+  "pyautogui",
+  "pyzbar"
 ]
 dynamic = ["version", "description"]
 
@@ -58,7 +60,8 @@ dev = [
   "types-tqdm",
   "pytest",
   "pytest-reporter-html1",
-  "oath"
+  "oath",
+  "types-PyAutoGUI"
 ]
 pcsc = ["pyscard >=2.0.0,<3"]
 
@@ -121,6 +124,7 @@ module = [
     "tlv8.*",
     "pytest.*",
     "click_aliases.*",
+    "pyzbar.*"
 ]
 ignore_missing_imports = true
 
